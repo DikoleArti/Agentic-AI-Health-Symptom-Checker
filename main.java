@@ -1,91 +1,79 @@
 import java.io.*;
-import java.net.MalformedURLException;
-import java.util.Base64;
-import java.util.HashMap;
-import java.util.Map;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+
 public class HttpClientTest {
-	public static void main(String[] args) throws IOException {
+    public static void main(String[] args) throws IOException {
 
-		// NOTE: you must manually set API_KEY below using information retrieved from your IBM Cloud account. (https://dataplatform.cloud.ibm.com/docs/content/wsj/analyze-data/ml-authentication.html?context=wx)
+        // 🔹 1. Set your IBM Cloud API key
+        String API_KEY = "<YOUR_IBM_CLOUD_API_KEY>";
 
-		String API_KEY = "<your API key>";
+        // 🔹 2. Get IAM Token
+        String iamToken = getIamToken(API_KEY);
 
-		HttpURLConnection tokenConnection = null;
-		HttpURLConnection scoringConnection = null;
-		BufferedReader tokenBuffer = null;
-		BufferedReader scoringBuffer = null;
-		try {
-			// Getting IAM token
-			URL tokenUrl = new URL("https://iam.cloud.ibm.com/identity/token?grant_type=urn:ibm:params:oauth:grant-type:apikey&apikey=" + API_KEY);
-			tokenConnection = (HttpURLConnection) tokenUrl.openConnection();
-			tokenConnection.setDoInput(true);
-			tokenConnection.setDoOutput(true);
-			tokenConnection.setRequestMethod("POST");
-			tokenConnection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
-			tokenConnection.setRequestProperty("Accept", "application/json");
-			
-			if (tokenConnection.getResponseCode() == 200) { // Successful response
-				tokenBuffer = new BufferedReader(new InputStreamReader(tokenConnection.getInputStream()));
-			} else { // Error response
-				tokenBuffer = new BufferedReader(new InputStreamReader(tokenConnection.getErrorStream()));
-			}
+        // 🔹 3. Send request to your Granite deployment
+        sendGraniteRequest(iamToken);
+    }
 
-            String line;
-			StringBuffer jsonString = new StringBuffer();
-            while ((line = tokenBuffer.readLine()) != null) {
-                jsonString.append(line);
-            }
-            System.out.println("Token response body:\n" + jsonString);
-			// Scoring request
-			URL scoringUrl = new URL("https://us-south.ml.cloud.ibm.com/ml/v4/deployments/6136913b-f48c-4d12-a6b5-0b3b2683cba2/ai_service_stream?version=2021-05-01");
-			String iam_token = "Bearer " + jsonString.toString().split(":")[1].split("\"")[1];
-			scoringConnection = (HttpURLConnection) scoringUrl.openConnection();
-			scoringConnection.setDoInput(true);
-			scoringConnection.setDoOutput(true);
-			scoringConnection.setRequestMethod("POST");
-			scoringConnection.setRequestProperty("Accept", "application/json");
-			scoringConnection.setRequestProperty("Authorization", iam_token);
-			scoringConnection.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
-			OutputStreamWriter writer = new OutputStreamWriter(scoringConnection.getOutputStream(), "UTF-8");
+    // ==================== Get IAM Token ====================
+    public static String getIamToken(String apiKey) throws IOException {
+        URL tokenUrl = new URL("https://iam.cloud.ibm.com/identity/token");
+        HttpURLConnection tokenConnection = (HttpURLConnection) tokenUrl.openConnection();
+        tokenConnection.setDoOutput(true);
+        tokenConnection.setRequestMethod("POST");
+        tokenConnection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
+        tokenConnection.setRequestProperty("Accept", "application/json");
 
-			// NOTE:  manually define and pass the array(s) of values to be scored in the next line
-			String payload = {"messages":[{"content":"","role":""}]};
+        String body = "grant_type=urn:ibm:params:oauth:grant-type:apikey&apikey=" + apiKey;
+        try (OutputStream os = tokenConnection.getOutputStream()) {
+            os.write(body.getBytes(StandardCharsets.UTF_8));
+        }
 
-			writer.write(payload);
-			writer.close();
+        String response = readResponse(tokenConnection);
+        String token = response.split("\"access_token\":\"")[1].split("\"")[0];
+        return "Bearer " + token;
+    }
 
-			if (scoringConnection.getResponseCode() == 200) { // Successful response
-				scoringBuffer = new BufferedReader(new InputStreamReader(scoringConnection.getInputStream()));
-			} else { // Error response
-				scoringBuffer = new BufferedReader(new InputStreamReader(scoringConnection.getErrorStream()));
-			}
+    // ==================== Send Granite Request ====================
+    public static void sendGraniteRequest(String iamToken) throws IOException {
+        // Replace with your own deployment URL from IBM WML
+        String deploymentUrl = "https://us-south.ml.cloud.ibm.com/ml/v4/deployments/<YOUR_DEPLOYMENT_ID>/ai_service_stream?version=2021-05-01";
 
-            String lineScoring;
-			StringBuffer jsonStringScoring = new StringBuffer();
-            while ((lineScoring = scoringBuffer.readLine()) != null) {
-                jsonStringScoring.append(lineScoring);
-            }
-            System.out.println("Scoring response body:\n" + jsonStringScoring);
-		} catch (IOException e) {
-			System.out.println("The request was not valid.");
-			System.out.println(e.getMessage());
-		}
-		finally {
-			if (tokenConnection != null) {
-				tokenConnection.disconnect();
-			}
-			if (tokenBuffer != null) {
-				tokenBuffer.close();
-			}
-			if (scoringConnection != null) {
-				scoringConnection.disconnect();
-			}
-			if (scoringBuffer != null) {
-				scoringBuffer.close();
-			}
-		}
-	}
+        URL scoringUrl = new URL(deploymentUrl);
+        HttpURLConnection scoringConnection = (HttpURLConnection) scoringUrl.openConnection();
+        scoringConnection.setDoOutput(true);
+        scoringConnection.setRequestMethod("POST");
+        scoringConnection.setRequestProperty("Accept", "application/json");
+        scoringConnection.setRequestProperty("Authorization", iamToken);
+        scoringConnection.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
+
+        // Example symptom checker prompt
+        String payload = "{\"messages\":[{\"role\":\"user\",\"content\":\"I have a headache and fever\"}]}";
+
+        try (OutputStream os = scoringConnection.getOutputStream()) {
+            os.write(payload.getBytes(StandardCharsets.UTF_8));
+        }
+
+        String response = readResponse(scoringConnection);
+        System.out.println("Granite AI Response:\n" + response);
+    }
+
+    // ==================== Read API Response ====================
+    public static String readResponse(HttpURLConnection connection) throws IOException {
+        BufferedReader reader;
+        if (connection.getResponseCode() >= 200 && connection.getResponseCode() < 300) {
+            reader = new BufferedReader(new InputStreamReader(connection.getInputStream(), StandardCharsets.UTF_8));
+        } else {
+            reader = new BufferedReader(new InputStreamReader(connection.getErrorStream(), StandardCharsets.UTF_8));
+        }
+
+        StringBuilder response = new StringBuilder();
+        String line;
+        while ((line = reader.readLine()) != null) {
+            response.append(line);
+        }
+        reader.close();
+        return response.toString();
+    }
 }
